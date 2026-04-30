@@ -3,7 +3,8 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
+const { getAudioDuration } = require('../services/audio-service');
 
 const router = express.Router();
 
@@ -20,7 +21,7 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
-    const name = `${uuidv4()}${ext}`;
+    const name = `${crypto.randomUUID()}${ext}`;
     cb(null, name);
   },
 });
@@ -49,16 +50,34 @@ const upload = multer({
  * Upload an audio file
  */
 router.post('/', upload.single('file'), async (req, res) => {
+  const deleteUploadedFile = () => {
+    if (!req.file) {
+      return;
+    }
+
+    fs.unlink(req.file.path, (error) => {
+      if (error) {
+        console.error('Failed to delete upload:', error.message);
+      }
+    });
+  };
+
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const uploadId = uuidv4();
-    const { originalName, mimetype, size, filename, path: filePath } = req.file;
+    const uploadId = crypto.randomUUID();
+    const duration = await getAudioDuration(req.file.path);
 
-    // Get audio duration (simplified - real implementation would use ffprobe)
-    const duration = Math.random() * 5 + 5; // Mock duration for now
+    if (duration < 5 || duration > 9) {
+      deleteUploadedFile();
+
+      return res.status(400).json({
+        error: 'Audio duration must be between 5 and 9 seconds',
+        duration,
+      });
+    }
 
     res.json({
       uploadId,
@@ -71,6 +90,7 @@ router.post('/', upload.single('file'), async (req, res) => {
       status: 'processing',
     });
   } catch (err) {
+    deleteUploadedFile();
     console.error('Upload error:', err);
     res.status(500).json({ error: 'Upload failed', message: err.message });
   }

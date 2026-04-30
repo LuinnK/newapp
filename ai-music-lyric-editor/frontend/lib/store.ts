@@ -1,4 +1,3 @@
-// Store for managing upload state
 import { create } from 'zustand';
 
 interface UploadState {

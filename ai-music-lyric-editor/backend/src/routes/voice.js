@@ -2,7 +2,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { synthesizeSpeech, getVoices } = require('../services/elevenlabs-service');
 
 const router = express.Router();
@@ -49,7 +49,7 @@ router.post('/synthesize', async (req, res) => {
     });
 
     // Save to file
-    const fileName = `${uuidv4()}.mp3`;
+    const fileName = `${crypto.randomUUID()}.mp3`;
     const filePath = path.join(uploadsDir, fileName);
     fs.writeFileSync(filePath, audioBuffer);
 

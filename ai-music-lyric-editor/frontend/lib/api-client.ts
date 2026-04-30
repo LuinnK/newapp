@@ -1,14 +1,30 @@
-// API client for frontend
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
+type ApiErrorPayload = {
+  error?: string;
+  message?: string;
+};
+
+async function getErrorMessage(response: Response, fallback: string) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      const body = (await response.json()) as ApiErrorPayload;
+      return body.message || body.error || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  return response.statusText || fallback;
+}
+
 export const apiClient = {
-  // Health check
   async checkHealth() {
     const response = await fetch(`${API_URL}/health`);
     return response.json();
   },
 
-  // Upload audio file
   async uploadAudio(file: File, originalLyrics?: string) {
     const formData = new FormData();
     formData.append('file', file);
@@ -22,13 +38,12 @@ export const apiClient = {
     });
 
     if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`);
+      throw new Error(await getErrorMessage(response, 'Upload failed'));
     }
 
     return response.json();
   },
 
-  // Generate lyrics with OpenAI
   async generateLyrics(originalLyrics: string, context?: string) {
     const response = await fetch(`${API_URL}/api/lyrics/generate`, {
       method: 'POST',
@@ -40,14 +55,12 @@ export const apiClient = {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Failed to generate lyrics');
+      throw new Error(await getErrorMessage(response, 'Failed to generate lyrics'));
     }
 
     return response.json();
   },
 
-  // Process audio with new lyrics
   async processAudio(uploadId: string, payload: {
     originalLyrics: string;
     newLyrics: string;
@@ -60,40 +73,35 @@ export const apiClient = {
     });
 
     if (!response.ok) {
-      throw new Error(`Processing failed: ${response.statusText}`);
+      throw new Error(await getErrorMessage(response, 'Processing failed'));
     }
 
     return response.json();
   },
 
-  // Get processing status
   async getStatus(processId: string) {
     const response = await fetch(`${API_URL}/api/process/${processId}`);
     if (!response.ok) {
-      throw new Error(`Status check failed: ${response.statusText}`);
+      throw new Error(await getErrorMessage(response, 'Status check failed'));
     }
     return response.json();
   },
 
-  // Poll for completion
   async pollUntilComplete(processId: string, maxAttempts = 60) {
     for (let i = 0; i < maxAttempts; i++) {
       const status = await this.getStatus(processId);
       if (status.status === 'completed' || status.status === 'failed') {
         return status;
       }
-      // Wait 2 seconds before next poll
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     throw new Error('Processing timeout');
   },
 
-  // Get download URL
   getDownloadUrl(resultId: string) {
     return `${API_URL}/api/download/${resultId}`;
   },
 
-  // Synthesize voice with ElevenLabs
   async synthesizeVoice(text: string, voiceId?: string) {
     const response = await fetch(`${API_URL}/api/voice/synthesize`, {
       method: 'POST',
@@ -105,18 +113,16 @@ export const apiClient = {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Failed to synthesize voice');
+      throw new Error(await getErrorMessage(response, 'Failed to synthesize voice'));
     }
 
     return response.json();
   },
 
-  // Get available voices
   async getAvailableVoices() {
     const response = await fetch(`${API_URL}/api/voice/list`);
     if (!response.ok) {
-      throw new Error('Failed to fetch voices');
+      throw new Error(await getErrorMessage(response, 'Failed to fetch voices'));
     }
     return response.json();
   },
