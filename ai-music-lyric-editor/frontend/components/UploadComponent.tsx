@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { Upload, Music, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, CheckCircle, Loader, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useUploadStore } from '@/lib/store';
 import { apiClient } from '@/lib/api-client';
@@ -10,7 +10,7 @@ export default function UploadComponent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [audioPreview, setAudioPreview] = useState<string>('');
-  
+
   const {
     fileName,
     duration,
@@ -24,18 +24,35 @@ export default function UploadComponent() {
   } = useUploadStore();
 
   const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || '10485760');
+  const MIN_DURATION = 5;
+  const MAX_DURATION = 9;
+
+  useEffect(() => {
+    return () => {
+      if (audioPreview) {
+        URL.revokeObjectURL(audioPreview);
+      }
+    };
+  }, [audioPreview]);
+
+  const resetInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   const handleFileSelect = async (file: File) => {
     setError(null);
 
-    // Validate file
     if (!file.type.includes('audio')) {
       setError('❌ Please select an audio file (MP3, WAV, etc.)');
+      resetInput();
       return;
     }
 
     if (file.size > MAX_FILE_SIZE) {
       setError(`❌ File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)`);
+      resetInput();
       return;
     }
 
@@ -43,27 +60,43 @@ export default function UploadComponent() {
       setIsLoading(true);
       setFileName(file.name);
 
-      // Create preview
       const url = URL.createObjectURL(file);
-      setAudioPreview(url);
 
-      // Get audio duration
-      const audio = new Audio();
-      audio.src = url;
-      audio.onloadedmetadata = () => {
-        setDuration(audio.duration);
-      };
+      const selectedDuration = await new Promise<number>((resolve, reject) => {
+        const audio = new Audio();
+        audio.preload = 'metadata';
+        audio.onloadedmetadata = () => resolve(audio.duration);
+        audio.onerror = () => reject(new Error('Could not read audio metadata'));
+        audio.src = url;
+      });
 
-      // Upload file
+      if (selectedDuration < MIN_DURATION || selectedDuration > MAX_DURATION) {
+        URL.revokeObjectURL(url);
+        setDuration(selectedDuration);
+        setError(`❌ Audio must be ${MIN_DURATION}-${MAX_DURATION} seconds long`);
+        resetInput();
+        return;
+      }
+
+      setAudioPreview((previousUrl) => {
+        if (previousUrl) {
+          URL.revokeObjectURL(previousUrl);
+        }
+        return url;
+      });
+      setDuration(selectedDuration);
+
       const response = await apiClient.uploadAudio(file);
-      
+
       if (response.uploadId) {
         setUploadId(response.uploadId);
         toast.success('✅ File uploaded successfully!');
       }
-    } catch (err: any) {
-      setError(err.message || 'Upload failed');
-      toast.error('❌ ' + (err.message || 'Upload failed'));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload failed';
+      setError(message);
+      toast.error('❌ ' + message);
+      resetInput();
     } finally {
       setIsLoading(false);
     }
@@ -72,7 +105,7 @@ export default function UploadComponent() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
+
     const files = e.dataTransfer.files;
     if (files[0]) {
       handleFileSelect(files[0]);
@@ -94,8 +127,8 @@ export default function UploadComponent() {
         className={`
           border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
           transition duration-200
-          ${isDragOver 
-            ? 'border-purple-400 bg-purple-500/10' 
+          ${isDragOver
+            ? 'border-purple-400 bg-purple-500/10'
             : 'border-purple-500/30 bg-purple-500/5'
           }
           ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
@@ -105,7 +138,7 @@ export default function UploadComponent() {
           ref={fileInputRef}
           type="file"
           accept="audio/*"
-          onChange={(e) => e.target.files && handleFileSelect(e.target.files[0])}
+          onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
           className="hidden"
           disabled={isLoading}
         />
@@ -124,7 +157,7 @@ export default function UploadComponent() {
                 <p className="text-sm text-slate-400">or click to browse</p>
               </div>
               <p className="text-xs text-slate-500">
-                Supports MP3, WAV, FLAC (max {MAX_FILE_SIZE / 1024 / 1024}MB)
+                Supports MP3, WAV, FLAC ({MIN_DURATION}-{MAX_DURATION}s, max {MAX_FILE_SIZE / 1024 / 1024}MB)
               </p>
             </>
           )}
@@ -166,18 +199,18 @@ export default function UploadComponent() {
           </div>
 
           {/* Next Steps */}
-          {duration && duration <= 9 && (
+          {duration && duration >= MIN_DURATION && duration <= MAX_DURATION && (
             <div className="p-4 rounded-lg bg-green-500/10 border border-green-500/30">
               <p className="text-sm text-green-200">
-                ✅ Perfect! Your audio is within the 5-9 second range.
+                ✅ Perfect! Your audio is within the {MIN_DURATION}-{MAX_DURATION} second range.
               </p>
             </div>
           )}
 
-          {duration && duration > 9 && (
+          {duration && (duration < MIN_DURATION || duration > MAX_DURATION) && (
             <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
               <p className="text-sm text-yellow-200">
-                ⚠️ Your audio is longer than recommended (9s). It may still work, but prefer shorter clips.
+                ⚠️ Your audio must be {MIN_DURATION}-{MAX_DURATION} seconds before upload.
               </p>
             </div>
           )}

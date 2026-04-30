@@ -25,7 +25,7 @@ export default function LyricEditorComponent() {
       setCopied(true);
       toast.success('Copied to clipboard!');
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
+    } catch {
       toast.error('Failed to copy');
     }
   };
@@ -46,9 +46,10 @@ export default function LyricEditorComponent() {
       
       toast.dismiss(loadingToast);
       toast.success('✅ Lyrics generated successfully!');
-    } catch (err: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate lyrics';
       console.error('Generate error:', err);
-      toast.error('❌ ' + (err.message || 'Failed to generate lyrics'));
+      toast.error('❌ ' + message);
     } finally {
       setIsGenerating(false);
     }

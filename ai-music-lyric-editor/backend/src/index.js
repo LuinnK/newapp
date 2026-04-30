@@ -2,7 +2,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 
 // Create Express app
 const app = express();
@@ -32,7 +31,7 @@ app.use('/api/lyrics', require('./routes/lyrics'));
 app.use('/api/voice', require('./routes/voice'));
 
 // Error handling middleware
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error('Error:', err.message);
   res.status(err.status || 500).json({
     error: err.message,

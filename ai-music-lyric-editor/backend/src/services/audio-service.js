@@ -1,7 +1,5 @@
 // Audio Processing Service (FFmpeg wrapper)
 const ffmpeg = require('fluent-ffmpeg');
-const path = require('path');
-const fs = require('fs');
 
 /**
  * Extract vocal and instrumental tracks from audio

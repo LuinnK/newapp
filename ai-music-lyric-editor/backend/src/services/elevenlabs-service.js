@@ -19,7 +19,6 @@ async function synthesizeSpeech(text, voiceId = VOICE_ID, options = {}) {
     const {
       stability = 0.5,
       similarityBoost = 0.75,
-      voiceStyle = 'default',
     } = options;
 
     const response = await axios.post(

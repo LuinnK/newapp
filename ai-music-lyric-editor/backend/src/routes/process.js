@@ -1,6 +1,6 @@
 // Processing route handler
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 const router = express.Router();
 
@@ -22,7 +22,7 @@ router.post('/:uploadId', async (req, res) => {
       });
     }
 
-    const processId = uuidv4();
+    const processId = crypto.randomUUID();
 
     // Store processing status
     processingStore.set(processId, {
