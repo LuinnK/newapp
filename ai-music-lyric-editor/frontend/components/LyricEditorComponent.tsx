@@ -9,7 +9,7 @@ import { apiClient } from '@/lib/api-client';
 export default function LyricEditorComponent() {
   const [copied, setCopied] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  
+
   const {
     originalLyrics,
     newLyrics,
@@ -25,7 +25,7 @@ export default function LyricEditorComponent() {
       setCopied(true);
       toast.success('Copied to clipboard!');
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
+    } catch {
       toast.error('Failed to copy');
     }
   };
@@ -41,14 +41,16 @@ export default function LyricEditorComponent() {
       const loadingToast = toast.loading('Generating new lyrics with AI...');
 
       const response = await apiClient.generateLyrics(originalLyrics, voiceStyle);
-      
+
       setNewLyrics(response.generatedLyrics);
-      
+
       toast.dismiss(loadingToast);
-      toast.success('✅ Lyrics generated successfully!');
-    } catch (err: any) {
+      toast.success('Lyrics generated successfully!');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to generate lyrics';
       console.error('Generate error:', err);
-      toast.error('❌ ' + (err.message || 'Failed to generate lyrics'));
+      toast.dismiss();
+      toast.error(message);
     } finally {
       setIsGenerating(false);
     }
@@ -56,14 +58,13 @@ export default function LyricEditorComponent() {
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
-      {/* Original Lyrics */}
       <div className="space-y-2">
         <label className="block text-sm font-semibold">Original Lyrics</label>
         <textarea
           value={originalLyrics}
           onChange={(e) => setOriginalLyrics(e.target.value)}
           placeholder="Paste the original song lyrics here..."
-          className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+          className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 resize-y"
         />
         {originalLyrics && (
           <button
@@ -76,7 +77,6 @@ export default function LyricEditorComponent() {
         )}
       </div>
 
-      {/* Voice Style Selection */}
       <div className="space-y-2">
         <label className="block text-sm font-semibold">Voice Style</label>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -98,7 +98,6 @@ export default function LyricEditorComponent() {
         </div>
       </div>
 
-      {/* Generate Button */}
       <button
         onClick={handleGenerateLyrics}
         disabled={isGenerating || !originalLyrics.trim()}
@@ -124,7 +123,6 @@ export default function LyricEditorComponent() {
         )}
       </button>
 
-      {/* Generated Lyrics */}
       {newLyrics && (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -135,7 +133,7 @@ export default function LyricEditorComponent() {
             value={newLyrics}
             onChange={(e) => setNewLyrics(e.target.value)}
             placeholder="AI-generated lyrics will appear here..."
-            className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-green-500/30 text-white placeholder-slate-500 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+            className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-green-500/30 text-white placeholder-slate-500 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 resize-y"
           />
           <button
             onClick={() => handleCopy(newLyrics)}

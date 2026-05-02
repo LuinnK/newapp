@@ -1,16 +1,25 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Upload, Music, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { Upload, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useUploadStore } from '@/lib/store';
 import { apiClient } from '@/lib/api-client';
+
+const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || '10485760');
+const ALLOWED_TYPES = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/flac', 'audio/ogg', 'audio/x-m4a', 'audio/mp4', 'audio/aac'];
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
 
 export default function UploadComponent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [audioPreview, setAudioPreview] = useState<string>('');
-  
+
   const {
     fileName,
     duration,
@@ -23,19 +32,26 @@ export default function UploadComponent() {
     setError,
   } = useUploadStore();
 
-  const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || '10485760');
+  const validateFile = (file: File): string | null => {
+    if (!file.type.includes('audio') && !ALLOWED_TYPES.includes(file.type)) {
+      return 'Please select an audio file (MP3, WAV, M4A, FLAC, etc.)';
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      return `File too large (${formatFileSize(file.size)}). Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.`;
+    }
+    if (file.size === 0) {
+      return 'File is empty. Please select a valid audio file.';
+    }
+    return null;
+  };
 
   const handleFileSelect = async (file: File) => {
     setError(null);
 
-    // Validate file
-    if (!file.type.includes('audio')) {
-      setError('❌ Please select an audio file (MP3, WAV, etc.)');
-      return;
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      setError(`❌ File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)`);
+    const validationError = validateFile(file);
+    if (validationError) {
+      setError(validationError);
+      toast.error(validationError);
       return;
     }
 
@@ -43,27 +59,25 @@ export default function UploadComponent() {
       setIsLoading(true);
       setFileName(file.name);
 
-      // Create preview
       const url = URL.createObjectURL(file);
       setAudioPreview(url);
 
-      // Get audio duration
       const audio = new Audio();
       audio.src = url;
       audio.onloadedmetadata = () => {
         setDuration(audio.duration);
       };
 
-      // Upload file
       const response = await apiClient.uploadAudio(file);
-      
+
       if (response.uploadId) {
         setUploadId(response.uploadId);
-        toast.success('✅ File uploaded successfully!');
+        toast.success('File uploaded successfully!');
       }
-    } catch (err: any) {
-      setError(err.message || 'Upload failed');
-      toast.error('❌ ' + (err.message || 'Upload failed'));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Upload failed. Please try again.';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -72,7 +86,7 @@ export default function UploadComponent() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
+
     const files = e.dataTransfer.files;
     if (files[0]) {
       handleFileSelect(files[0]);
@@ -80,12 +94,13 @@ export default function UploadComponent() {
   };
 
   const handleClick = () => {
-    fileInputRef.current?.click();
+    if (!isLoading) {
+      fileInputRef.current?.click();
+    }
   };
 
   return (
     <div className="w-full max-w-2xl mx-auto">
-      {/* Upload Zone */}
       <div
         onDrop={handleDrop}
         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
@@ -94,8 +109,8 @@ export default function UploadComponent() {
         className={`
           border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
           transition duration-200
-          ${isDragOver 
-            ? 'border-purple-400 bg-purple-500/10' 
+          ${isDragOver
+            ? 'border-purple-400 bg-purple-500/10'
             : 'border-purple-500/30 bg-purple-500/5'
           }
           ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
@@ -104,8 +119,8 @@ export default function UploadComponent() {
         <input
           ref={fileInputRef}
           type="file"
-          accept="audio/*"
-          onChange={(e) => e.target.files && handleFileSelect(e.target.files[0])}
+          accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac"
+          onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
           className="hidden"
           disabled={isLoading}
         />
@@ -115,6 +130,7 @@ export default function UploadComponent() {
             <>
               <Loader className="w-12 h-12 mx-auto text-purple-400 animate-spin" />
               <p className="text-lg font-semibold">Uploading...</p>
+              <p className="text-sm text-slate-400">Please wait</p>
             </>
           ) : (
             <>
@@ -124,14 +140,13 @@ export default function UploadComponent() {
                 <p className="text-sm text-slate-400">or click to browse</p>
               </div>
               <p className="text-xs text-slate-500">
-                Supports MP3, WAV, FLAC (max {MAX_FILE_SIZE / 1024 / 1024}MB)
+                Supports MP3, WAV, M4A, FLAC, AAC (max {formatFileSize(MAX_FILE_SIZE)})
               </p>
             </>
           )}
         </div>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="mt-4 p-4 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
@@ -139,7 +154,6 @@ export default function UploadComponent() {
         </div>
       )}
 
-      {/* File Info */}
       {fileName && (
         <div className="mt-6 space-y-4">
           <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/30">
@@ -155,7 +169,6 @@ export default function UploadComponent() {
               </div>
             </div>
 
-            {/* Audio Player */}
             {audioPreview && (
               <audio
                 src={audioPreview}
@@ -165,19 +178,18 @@ export default function UploadComponent() {
             )}
           </div>
 
-          {/* Next Steps */}
-          {duration && duration <= 9 && (
+          {duration !== null && duration <= 9 && (
             <div className="p-4 rounded-lg bg-green-500/10 border border-green-500/30">
               <p className="text-sm text-green-200">
-                ✅ Perfect! Your audio is within the 5-9 second range.
+                Perfect! Your audio is within the 5-9 second range.
               </p>
             </div>
           )}
 
-          {duration && duration > 9 && (
+          {duration !== null && duration > 9 && (
             <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
               <p className="text-sm text-yellow-200">
-                ⚠️ Your audio is longer than recommended (9s). It may still work, but prefer shorter clips.
+                Your audio is longer than recommended (9s). It may still work, but shorter clips produce better results.
               </p>
             </div>
           )}

@@ -1,29 +1,32 @@
-// ElevenLabs Voice Synthesis Service
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
-const API_KEY = process.env.ELEVENLABS_API_KEY;
-const VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
 
-/**
- * Synthesize speech from text using ElevenLabs
- * @param {string} text - Text to synthesize
- * @param {string} voiceId - Voice ID to use (defaults to env variable)
- * @param {Object} options - Additional options
- * @returns {Promise<Buffer>} Audio buffer (MP3)
- */
-async function synthesizeSpeech(text, voiceId = VOICE_ID, options = {}) {
+function getApiKey() {
+  if (!process.env.ELEVENLABS_API_KEY) {
+    throw new Error('ELEVENLABS_API_KEY is not configured. Please add it to your .env file.');
+  }
+  return process.env.ELEVENLABS_API_KEY;
+}
+
+async function synthesizeSpeech(text, voiceId, options = {}) {
+  const apiKey = getApiKey();
+  const resolvedVoiceId = voiceId || process.env.ELEVENLABS_VOICE_ID;
+
+  if (!resolvedVoiceId) {
+    throw new Error('Voice ID not configured. Set ELEVENLABS_VOICE_ID in .env or pass a voiceId.');
+  }
+
+  const {
+    stability = 0.5,
+    similarityBoost = 0.75,
+  } = options;
+
   try {
-    const {
-      stability = 0.5,
-      similarityBoost = 0.75,
-      voiceStyle = 'default',
-    } = options;
-
     const response = await axios.post(
-      `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
+      `${ELEVENLABS_API_URL}/text-to-speech/${resolvedVoiceId}`,
       {
         text,
         model_id: 'eleven_monolingual_v1',
@@ -34,27 +37,35 @@ async function synthesizeSpeech(text, voiceId = VOICE_ID, options = {}) {
       },
       {
         headers: {
-          'xi-api-key': API_KEY,
+          'xi-api-key': apiKey,
           'Content-Type': 'application/json',
         },
         responseType: 'arraybuffer',
+        timeout: 30000,
       }
     );
 
     return Buffer.from(response.data);
   } catch (error) {
-    console.error('Error synthesizing speech:', error.message);
-    throw new Error('Failed to synthesize speech');
+    if (error.response) {
+      if (error.response.status === 401) {
+        throw new Error('Invalid ElevenLabs API key. Please check your ELEVENLABS_API_KEY in .env');
+      }
+      if (error.response.status === 429) {
+        throw new Error('ElevenLabs rate limit exceeded. Please try again later.');
+      }
+    }
+    throw new Error('Failed to synthesize speech: ' + error.message);
   }
 }
 
-/**
- * Clone a voice for synthesis
- * @param {string} audioPath - Path to sample audio
- * @param {string} voiceName - Name for the cloned voice
- * @returns {Promise<string>} New voice ID
- */
 async function cloneVoice(audioPath, voiceName) {
+  const apiKey = getApiKey();
+
+  if (!fs.existsSync(audioPath)) {
+    throw new Error('Audio file not found: ' + audioPath);
+  }
+
   try {
     const audioBuffer = fs.readFileSync(audioPath);
     const formData = new FormData();
@@ -66,35 +77,34 @@ async function cloneVoice(audioPath, voiceName) {
       formData,
       {
         headers: {
-          'xi-api-key': API_KEY,
+          'xi-api-key': apiKey,
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 60000,
       }
     );
 
     return response.data.voice_id;
   } catch (error) {
-    console.error('Error cloning voice:', error.message);
-    throw new Error('Failed to clone voice');
+    throw new Error('Failed to clone voice: ' + error.message);
   }
 }
 
-/**
- * Get available voices
- * @returns {Promise<Array>} List of available voices
- */
 async function getVoices() {
+  const apiKey = getApiKey();
+
   try {
     const response = await axios.get(`${ELEVENLABS_API_URL}/voices`, {
-      headers: {
-        'xi-api-key': API_KEY,
-      },
+      headers: { 'xi-api-key': apiKey },
+      timeout: 10000,
     });
 
     return response.data.voices;
   } catch (error) {
-    console.error('Error fetching voices:', error.message);
-    throw new Error('Failed to fetch voices');
+    if (error.response && error.response.status === 401) {
+      throw new Error('Invalid ElevenLabs API key. Please check your ELEVENLABS_API_KEY in .env');
+    }
+    throw new Error('Failed to fetch voices: ' + error.message);
   }
 }
 

@@ -1,0 +1,940 @@
+diff --git a/ai-music-lyric-editor/backend/src/index.js b/ai-music-lyric-editor/backend/src/index.js
+index 683c25c..024447d 100644
+--- a/ai-music-lyric-editor/backend/src/index.js
++++ b/ai-music-lyric-editor/backend/src/index.js
+@@ -1,54 +1,61 @@
+-// Main server entry point
+ require('dotenv').config();
+ const express = require('express');
+ const cors = require('cors');
+-const path = require('path');
+ 
+-// Create Express app
+ const app = express();
+ 
+-// Middleware
+ app.use(cors({
+   origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+   credentials: true
+ }));
+-app.use(express.json());
++app.use(express.json({ limit: '50mb' }));
+ app.use(express.urlencoded({ limit: '50mb', extended: true }));
+ 
+-// Health check
+ app.get('/health', (req, res) => {
+-  res.json({ 
+-    status: 'ok', 
++  res.json({
++    status: 'ok',
+     timestamp: new Date(),
+     service: 'AI Music Lyric Editor Backend'
+   });
+ });
+ 
+-// Routes
+ app.use('/api/upload', require('./routes/upload'));
+ app.use('/api/process', require('./routes/process'));
+ app.use('/api/download', require('./routes/download'));
+ app.use('/api/lyrics', require('./routes/lyrics'));
+ app.use('/api/voice', require('./routes/voice'));
+ 
+-// Error handling middleware
+-app.use((err, req, res, next) => {
++app.use((err, req, res, _next) => {
+   console.error('Error:', err.message);
++  console.error('Stack:', err.stack);
++
++  if (err.code === 'LIMIT_FILE_SIZE') {
++    return res.status(413).json({
++      error: 'File too large',
++      message: 'The uploaded file exceeds the maximum allowed size.',
++    });
++  }
++
++  if (err.message && err.message.includes('Invalid file type')) {
++    return res.status(400).json({
++      error: 'Invalid file type',
++      message: err.message,
++    });
++  }
++
+   res.status(err.status || 500).json({
+-    error: err.message,
++    error: err.message || 'Internal server error',
+     status: err.status || 500
+   });
+ });
+ 
+-// 404 handler
+ app.use((req, res) => {
+-  res.status(404).json({ error: 'Route not found' });
++  res.status(404).json({ error: 'Route not found', path: req.originalUrl });
+ });
+ 
+-// Start server
+ const PORT = process.env.PORT || 5000;
+ app.listen(PORT, () => {
+-  console.log(`🎵 Backend running on http://localhost:${PORT}`);
++  console.log(`Backend running on http://localhost:${PORT}`);
+   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+   console.log('');
+   console.log('Available endpoints:');
+@@ -57,6 +64,9 @@ app.listen(PORT, () => {
+   console.log('  POST /api/process/:uploadId');
+   console.log('  GET  /api/process/:processId');
+   console.log('  GET  /api/download/:fileId');
++  console.log('  POST /api/lyrics/generate');
++  console.log('  POST /api/voice/synthesize');
++  console.log('  GET  /api/voice/list');
+ });
+ 
+ module.exports = app;
+diff --git a/ai-music-lyric-editor/backend/src/services/elevenlabs-service.js b/ai-music-lyric-editor/backend/src/services/elevenlabs-service.js
+index 4a194c7..6ea9d39 100644
+--- a/ai-music-lyric-editor/backend/src/services/elevenlabs-service.js
++++ b/ai-music-lyric-editor/backend/src/services/elevenlabs-service.js
+@@ -1,29 +1,32 @@
+-// ElevenLabs Voice Synthesis Service
+ const axios = require('axios');
+ const fs = require('fs');
+ const path = require('path');
+ 
+ const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
+-const API_KEY = process.env.ELEVENLABS_API_KEY;
+-const VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
+-
+-/**
+- * Synthesize speech from text using ElevenLabs
+- * @param {string} text - Text to synthesize
+- * @param {string} voiceId - Voice ID to use (defaults to env variable)
+- * @param {Object} options - Additional options
+- * @returns {Promise<Buffer>} Audio buffer (MP3)
+- */
+-async function synthesizeSpeech(text, voiceId = VOICE_ID, options = {}) {
+-  try {
+-    const {
+-      stability = 0.5,
+-      similarityBoost = 0.75,
+-      voiceStyle = 'default',
+-    } = options;
+ 
++function getApiKey() {
++  if (!process.env.ELEVENLABS_API_KEY) {
++    throw new Error('ELEVENLABS_API_KEY is not configured. Please add it to your .env file.');
++  }
++  return process.env.ELEVENLABS_API_KEY;
++}
++
++async function synthesizeSpeech(text, voiceId, options = {}) {
++  const apiKey = getApiKey();
++  const resolvedVoiceId = voiceId || process.env.ELEVENLABS_VOICE_ID;
++
++  if (!resolvedVoiceId) {
++    throw new Error('Voice ID not configured. Set ELEVENLABS_VOICE_ID in .env or pass a voiceId.');
++  }
++
++  const {
++    stability = 0.5,
++    similarityBoost = 0.75,
++  } = options;
++
++  try {
+     const response = await axios.post(
+-      `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
++      `${ELEVENLABS_API_URL}/text-to-speech/${resolvedVoiceId}`,
+       {
+         text,
+         model_id: 'eleven_monolingual_v1',
+@@ -34,27 +37,35 @@ async function synthesizeSpeech(text, voiceId = VOICE_ID, options = {}) {
+       },
+       {
+         headers: {
+-          'xi-api-key': API_KEY,
++          'xi-api-key': apiKey,
+           'Content-Type': 'application/json',
+         },
+         responseType: 'arraybuffer',
++        timeout: 30000,
+       }
+     );
+ 
+     return Buffer.from(response.data);
+   } catch (error) {
+-    console.error('Error synthesizing speech:', error.message);
+-    throw new Error('Failed to synthesize speech');
++    if (error.response) {
++      if (error.response.status === 401) {
++        throw new Error('Invalid ElevenLabs API key. Please check your ELEVENLABS_API_KEY in .env');
++      }
++      if (error.response.status === 429) {
++        throw new Error('ElevenLabs rate limit exceeded. Please try again later.');
++      }
++    }
++    throw new Error('Failed to synthesize speech: ' + error.message);
+   }
+ }
+ 
+-/**
+- * Clone a voice for synthesis
+- * @param {string} audioPath - Path to sample audio
+- * @param {string} voiceName - Name for the cloned voice
+- * @returns {Promise<string>} New voice ID
+- */
+ async function cloneVoice(audioPath, voiceName) {
++  const apiKey = getApiKey();
++
++  if (!fs.existsSync(audioPath)) {
++    throw new Error('Audio file not found: ' + audioPath);
++  }
++
+   try {
+     const audioBuffer = fs.readFileSync(audioPath);
+     const formData = new FormData();
+@@ -66,35 +77,34 @@ async function cloneVoice(audioPath, voiceName) {
+       formData,
+       {
+         headers: {
+-          'xi-api-key': API_KEY,
++          'xi-api-key': apiKey,
+           'Content-Type': 'multipart/form-data',
+         },
++        timeout: 60000,
+       }
+     );
+ 
+     return response.data.voice_id;
+   } catch (error) {
+-    console.error('Error cloning voice:', error.message);
+-    throw new Error('Failed to clone voice');
++    throw new Error('Failed to clone voice: ' + error.message);
+   }
+ }
+ 
+-/**
+- * Get available voices
+- * @returns {Promise<Array>} List of available voices
+- */
+ async function getVoices() {
++  const apiKey = getApiKey();
++
+   try {
+     const response = await axios.get(`${ELEVENLABS_API_URL}/voices`, {
+-      headers: {
+-        'xi-api-key': API_KEY,
+-      },
++      headers: { 'xi-api-key': apiKey },
++      timeout: 10000,
+     });
+ 
+     return response.data.voices;
+   } catch (error) {
+-    console.error('Error fetching voices:', error.message);
+-    throw new Error('Failed to fetch voices');
++    if (error.response && error.response.status === 401) {
++      throw new Error('Invalid ElevenLabs API key. Please check your ELEVENLABS_API_KEY in .env');
++    }
++    throw new Error('Failed to fetch voices: ' + error.message);
+   }
+ }
+ 
+diff --git a/ai-music-lyric-editor/backend/src/services/openai-service.js b/ai-music-lyric-editor/backend/src/services/openai-service.js
+index 0e2cc0d..8ed5cc5 100644
+--- a/ai-music-lyric-editor/backend/src/services/openai-service.js
++++ b/ai-music-lyric-editor/backend/src/services/openai-service.js
+@@ -1,19 +1,21 @@
+-// OpenAI Integration
+ const { OpenAI } = require('openai');
+ 
+-const openai = new OpenAI({
+-  apiKey: process.env.OPENAI_API_KEY,
+-});
++let openai = null;
++
++function getOpenAIClient() {
++  if (!process.env.OPENAI_API_KEY) {
++    throw new Error('OPENAI_API_KEY is not configured. Please add it to your .env file.');
++  }
++  if (!openai) {
++    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
++  }
++  return openai;
++}
+ 
+-/**
+- * Generate new lyrics based on original
+- * @param {string} originalLyrics - Original song lyrics
+- * @param {string} context - Context for lyrics (mood, style, theme)
+- * @returns {Promise<string>} Generated new lyrics
+- */
+ async function generateLyrics(originalLyrics, context = '') {
+-  try {
+-    const prompt = `You are a professional lyric writer. 
++  const client = getOpenAIClient();
++
++  const prompt = `You are a professional lyric writer. 
+ Given the following original lyrics, generate new lyrics that:
+ 1. Keep the same structure and rhythm
+ 2. Maintain the same melody/syllable count per line
+@@ -26,7 +28,8 @@ ${originalLyrics}
+ 
+ Generate only the new lyrics without any explanation.`;
+ 
+-    const response = await openai.chat.completions.create({
++  try {
++    const response = await client.chat.completions.create({
+       model: 'gpt-4',
+       messages: [
+         {
+@@ -44,19 +47,22 @@ Generate only the new lyrics without any explanation.`;
+ 
+     return response.choices[0].message.content;
+   } catch (error) {
+-    console.error('Error generating lyrics:', error);
+-    throw new Error('Failed to generate lyrics');
++    console.error('OpenAI API error:', error.message);
++    if (error.status === 401) {
++      throw new Error('Invalid OpenAI API key. Please check your OPENAI_API_KEY in .env');
++    }
++    if (error.status === 429) {
++      throw new Error('OpenAI rate limit exceeded. Please try again later.');
++    }
++    throw new Error('Failed to generate lyrics: ' + error.message);
+   }
+ }
+ 
+-/**
+- * Analyze sentiment of lyrics
+- * @param {string} lyrics - Lyrics to analyze
+- * @returns {Promise<Object>} Sentiment analysis
+- */
+ async function analyzeSentiment(lyrics) {
+   try {
+-    const response = await openai.chat.completions.create({
++    const client = getOpenAIClient();
++
++    const response = await client.chat.completions.create({
+       model: 'gpt-4',
+       messages: [
+         {
+@@ -84,7 +90,7 @@ ${lyrics}`,
+       return {};
+     }
+   } catch (error) {
+-    console.error('Error analyzing sentiment:', error);
++    console.error('Sentiment analysis error:', error.message);
+     return {};
+   }
+ }
+diff --git a/ai-music-lyric-editor/frontend/components/LyricEditorComponent.tsx b/ai-music-lyric-editor/frontend/components/LyricEditorComponent.tsx
+index 441fabe..b5070de 100644
+--- a/ai-music-lyric-editor/frontend/components/LyricEditorComponent.tsx
++++ b/ai-music-lyric-editor/frontend/components/LyricEditorComponent.tsx
+@@ -9,7 +9,7 @@ import { apiClient } from '@/lib/api-client';
+ export default function LyricEditorComponent() {
+   const [copied, setCopied] = useState(false);
+   const [isGenerating, setIsGenerating] = useState(false);
+-  
++
+   const {
+     originalLyrics,
+     newLyrics,
+@@ -25,7 +25,7 @@ export default function LyricEditorComponent() {
+       setCopied(true);
+       toast.success('Copied to clipboard!');
+       setTimeout(() => setCopied(false), 2000);
+-    } catch (err) {
++    } catch {
+       toast.error('Failed to copy');
+     }
+   };
+@@ -41,14 +41,16 @@ export default function LyricEditorComponent() {
+       const loadingToast = toast.loading('Generating new lyrics with AI...');
+ 
+       const response = await apiClient.generateLyrics(originalLyrics, voiceStyle);
+-      
++
+       setNewLyrics(response.generatedLyrics);
+-      
++
+       toast.dismiss(loadingToast);
+-      toast.success('✅ Lyrics generated successfully!');
+-    } catch (err: any) {
++      toast.success('Lyrics generated successfully!');
++    } catch (err: unknown) {
++      const message = err instanceof Error ? err.message : 'Failed to generate lyrics';
+       console.error('Generate error:', err);
+-      toast.error('❌ ' + (err.message || 'Failed to generate lyrics'));
++      toast.dismiss();
++      toast.error(message);
+     } finally {
+       setIsGenerating(false);
+     }
+@@ -56,14 +58,13 @@ export default function LyricEditorComponent() {
+ 
+   return (
+     <div className="w-full max-w-4xl mx-auto space-y-6">
+-      {/* Original Lyrics */}
+       <div className="space-y-2">
+         <label className="block text-sm font-semibold">Original Lyrics</label>
+         <textarea
+           value={originalLyrics}
+           onChange={(e) => setOriginalLyrics(e.target.value)}
+           placeholder="Paste the original song lyrics here..."
+-          className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
++          className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 resize-y"
+         />
+         {originalLyrics && (
+           <button
+@@ -76,7 +77,6 @@ export default function LyricEditorComponent() {
+         )}
+       </div>
+ 
+-      {/* Voice Style Selection */}
+       <div className="space-y-2">
+         <label className="block text-sm font-semibold">Voice Style</label>
+         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+@@ -98,7 +98,6 @@ export default function LyricEditorComponent() {
+         </div>
+       </div>
+ 
+-      {/* Generate Button */}
+       <button
+         onClick={handleGenerateLyrics}
+         disabled={isGenerating || !originalLyrics.trim()}
+@@ -124,7 +123,6 @@ export default function LyricEditorComponent() {
+         )}
+       </button>
+ 
+-      {/* Generated Lyrics */}
+       {newLyrics && (
+         <div className="space-y-2">
+           <div className="flex items-center gap-2">
+@@ -135,7 +133,7 @@ export default function LyricEditorComponent() {
+             value={newLyrics}
+             onChange={(e) => setNewLyrics(e.target.value)}
+             placeholder="AI-generated lyrics will appear here..."
+-            className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-green-500/30 text-white placeholder-slate-500 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
++            className="w-full h-32 p-4 rounded-lg bg-slate-900/50 border border-green-500/30 text-white placeholder-slate-500 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 resize-y"
+           />
+           <button
+             onClick={() => handleCopy(newLyrics)}
+diff --git a/ai-music-lyric-editor/frontend/components/UploadComponent.tsx b/ai-music-lyric-editor/frontend/components/UploadComponent.tsx
+index b226795..503c894 100644
+--- a/ai-music-lyric-editor/frontend/components/UploadComponent.tsx
++++ b/ai-music-lyric-editor/frontend/components/UploadComponent.tsx
+@@ -1,16 +1,25 @@
+ 'use client';
+ 
+ import { useState, useRef } from 'react';
+-import { Upload, Music, AlertCircle, CheckCircle, Loader } from 'lucide-react';
++import { Upload, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+ import toast from 'react-hot-toast';
+ import { useUploadStore } from '@/lib/store';
+ import { apiClient } from '@/lib/api-client';
+ 
++const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || '10485760');
++const ALLOWED_TYPES = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/flac', 'audio/ogg', 'audio/x-m4a', 'audio/mp4', 'audio/aac'];
++
++function formatFileSize(bytes: number): string {
++  if (bytes < 1024) return bytes + ' B';
++  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
++  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
++}
++
+ export default function UploadComponent() {
+   const fileInputRef = useRef<HTMLInputElement>(null);
+   const [isDragOver, setIsDragOver] = useState(false);
+   const [audioPreview, setAudioPreview] = useState<string>('');
+-  
++
+   const {
+     fileName,
+     duration,
+@@ -23,19 +32,26 @@ export default function UploadComponent() {
+     setError,
+   } = useUploadStore();
+ 
+-  const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || '10485760');
++  const validateFile = (file: File): string | null => {
++    if (!file.type.includes('audio') && !ALLOWED_TYPES.includes(file.type)) {
++      return 'Please select an audio file (MP3, WAV, M4A, FLAC, etc.)';
++    }
++    if (file.size > MAX_FILE_SIZE) {
++      return `File too large (${formatFileSize(file.size)}). Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.`;
++    }
++    if (file.size === 0) {
++      return 'File is empty. Please select a valid audio file.';
++    }
++    return null;
++  };
+ 
+   const handleFileSelect = async (file: File) => {
+     setError(null);
+ 
+-    // Validate file
+-    if (!file.type.includes('audio')) {
+-      setError('❌ Please select an audio file (MP3, WAV, etc.)');
+-      return;
+-    }
+-
+-    if (file.size > MAX_FILE_SIZE) {
+-      setError(`❌ File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)`);
++    const validationError = validateFile(file);
++    if (validationError) {
++      setError(validationError);
++      toast.error(validationError);
+       return;
+     }
+ 
+@@ -43,27 +59,25 @@ export default function UploadComponent() {
+       setIsLoading(true);
+       setFileName(file.name);
+ 
+-      // Create preview
+       const url = URL.createObjectURL(file);
+       setAudioPreview(url);
+ 
+-      // Get audio duration
+       const audio = new Audio();
+       audio.src = url;
+       audio.onloadedmetadata = () => {
+         setDuration(audio.duration);
+       };
+ 
+-      // Upload file
+       const response = await apiClient.uploadAudio(file);
+-      
++
+       if (response.uploadId) {
+         setUploadId(response.uploadId);
+-        toast.success('✅ File uploaded successfully!');
++        toast.success('File uploaded successfully!');
+       }
+-    } catch (err: any) {
+-      setError(err.message || 'Upload failed');
+-      toast.error('❌ ' + (err.message || 'Upload failed'));
++    } catch (err: unknown) {
++      const message = err instanceof Error ? err.message : 'Upload failed. Please try again.';
++      setError(message);
++      toast.error(message);
+     } finally {
+       setIsLoading(false);
+     }
+@@ -72,7 +86,7 @@ export default function UploadComponent() {
+   const handleDrop = (e: React.DragEvent) => {
+     e.preventDefault();
+     setIsDragOver(false);
+-    
++
+     const files = e.dataTransfer.files;
+     if (files[0]) {
+       handleFileSelect(files[0]);
+@@ -80,12 +94,13 @@ export default function UploadComponent() {
+   };
+ 
+   const handleClick = () => {
+-    fileInputRef.current?.click();
++    if (!isLoading) {
++      fileInputRef.current?.click();
++    }
+   };
+ 
+   return (
+     <div className="w-full max-w-2xl mx-auto">
+-      {/* Upload Zone */}
+       <div
+         onDrop={handleDrop}
+         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+@@ -94,8 +109,8 @@ export default function UploadComponent() {
+         className={`
+           border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
+           transition duration-200
+-          ${isDragOver 
+-            ? 'border-purple-400 bg-purple-500/10' 
++          ${isDragOver
++            ? 'border-purple-400 bg-purple-500/10'
+             : 'border-purple-500/30 bg-purple-500/5'
+           }
+           ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
+@@ -104,8 +119,8 @@ export default function UploadComponent() {
+         <input
+           ref={fileInputRef}
+           type="file"
+-          accept="audio/*"
+-          onChange={(e) => e.target.files && handleFileSelect(e.target.files[0])}
++          accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac"
++          onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+           className="hidden"
+           disabled={isLoading}
+         />
+@@ -115,6 +130,7 @@ export default function UploadComponent() {
+             <>
+               <Loader className="w-12 h-12 mx-auto text-purple-400 animate-spin" />
+               <p className="text-lg font-semibold">Uploading...</p>
++              <p className="text-sm text-slate-400">Please wait</p>
+             </>
+           ) : (
+             <>
+@@ -124,14 +140,13 @@ export default function UploadComponent() {
+                 <p className="text-sm text-slate-400">or click to browse</p>
+               </div>
+               <p className="text-xs text-slate-500">
+-                Supports MP3, WAV, FLAC (max {MAX_FILE_SIZE / 1024 / 1024}MB)
++                Supports MP3, WAV, M4A, FLAC, AAC (max {formatFileSize(MAX_FILE_SIZE)})
+               </p>
+             </>
+           )}
+         </div>
+       </div>
+ 
+-      {/* Error Message */}
+       {error && (
+         <div className="mt-4 p-4 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-3">
+           <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+@@ -139,7 +154,6 @@ export default function UploadComponent() {
+         </div>
+       )}
+ 
+-      {/* File Info */}
+       {fileName && (
+         <div className="mt-6 space-y-4">
+           <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/30">
+@@ -155,7 +169,6 @@ export default function UploadComponent() {
+               </div>
+             </div>
+ 
+-            {/* Audio Player */}
+             {audioPreview && (
+               <audio
+                 src={audioPreview}
+@@ -165,19 +178,18 @@ export default function UploadComponent() {
+             )}
+           </div>
+ 
+-          {/* Next Steps */}
+-          {duration && duration <= 9 && (
++          {duration !== null && duration <= 9 && (
+             <div className="p-4 rounded-lg bg-green-500/10 border border-green-500/30">
+               <p className="text-sm text-green-200">
+-                ✅ Perfect! Your audio is within the 5-9 second range.
++                Perfect! Your audio is within the 5-9 second range.
+               </p>
+             </div>
+           )}
+ 
+-          {duration && duration > 9 && (
++          {duration !== null && duration > 9 && (
+             <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+               <p className="text-sm text-yellow-200">
+-                ⚠️ Your audio is longer than recommended (9s). It may still work, but prefer shorter clips.
++                Your audio is longer than recommended (9s). It may still work, but shorter clips produce better results.
+               </p>
+             </div>
+           )}
+diff --git a/ai-music-lyric-editor/frontend/lib/api-client.ts b/ai-music-lyric-editor/frontend/lib/api-client.ts
+index 374306a..f7066bb 100644
+--- a/ai-music-lyric-editor/frontend/lib/api-client.ts
++++ b/ai-music-lyric-editor/frontend/lib/api-client.ts
+@@ -1,14 +1,77 @@
+-// API client for frontend
+ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
++const REQUEST_TIMEOUT = 30000;
++
++class ApiError extends Error {
++  code: string;
++  status: number;
++
++  constructor(message: string, code: string = 'UNKNOWN_ERROR', status: number = 500) {
++    super(message);
++    this.name = 'ApiError';
++    this.code = code;
++    this.status = status;
++  }
++}
++
++async function fetchWithTimeout(
++  url: string,
++  options: RequestInit = {},
++  timeout: number = REQUEST_TIMEOUT
++): Promise<Response> {
++  const controller = new AbortController();
++  const timeoutId = setTimeout(() => controller.abort(), timeout);
++
++  try {
++    const response = await fetch(url, {
++      ...options,
++      signal: controller.signal,
++    });
++    return response;
++  } catch (error: unknown) {
++    if (error instanceof DOMException && error.name === 'AbortError') {
++      throw new ApiError(
++        'Request timed out. Please try again.',
++        'TIMEOUT',
++        408
++      );
++    }
++    if (error instanceof TypeError && (error.message.includes('fetch') || error.message.includes('network'))) {
++      throw new ApiError(
++        'Cannot connect to the server. Please make sure the backend is running on ' + API_URL,
++        'CONNECTION_ERROR',
++        0
++      );
++    }
++    throw new ApiError(
++      'Cannot connect to the server. Please check your network connection and make sure the backend is running.',
++      'NETWORK_ERROR',
++      0
++    );
++  } finally {
++    clearTimeout(timeoutId);
++  }
++}
++
++async function handleResponse<T>(response: Response): Promise<T> {
++  if (!response.ok) {
++    let errorMessage = `Request failed (${response.status})`;
++    try {
++      const errorData = await response.json();
++      errorMessage = errorData.message || errorData.error || errorMessage;
++    } catch {
++      // response body is not JSON
++    }
++    throw new ApiError(errorMessage, 'API_ERROR', response.status);
++  }
++  return response.json();
++}
+ 
+ export const apiClient = {
+-  // Health check
+   async checkHealth() {
+-    const response = await fetch(`${API_URL}/health`);
+-    return response.json();
++    const response = await fetchWithTimeout(`${API_URL}/health`, {}, 5000);
++    return handleResponse(response);
+   },
+ 
+-  // Upload audio file
+   async uploadAudio(file: File, originalLyrics?: string) {
+     const formData = new FormData();
+     formData.append('file', file);
+@@ -16,108 +79,115 @@ export const apiClient = {
+       formData.append('originalLyrics', originalLyrics);
+     }
+ 
+-    const response = await fetch(`${API_URL}/api/upload`, {
+-      method: 'POST',
+-      body: formData,
+-    });
+-
+-    if (!response.ok) {
+-      throw new Error(`Upload failed: ${response.statusText}`);
+-    }
+-
+-    return response.json();
++    const response = await fetchWithTimeout(
++      `${API_URL}/api/upload`,
++      { method: 'POST', body: formData },
++      60000
++    );
++    return handleResponse<{
++      uploadId: string;
++      fileName: string;
++      fileId: string;
++      duration: number;
++      size: number;
++      mimeType: string;
++      uploadedAt: string;
++      status: string;
++    }>(response);
+   },
+ 
+-  // Generate lyrics with OpenAI
+   async generateLyrics(originalLyrics: string, context?: string) {
+-    const response = await fetch(`${API_URL}/api/lyrics/generate`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({
+-        originalLyrics,
+-        context: context || '',
+-      }),
+-    });
+-
+-    if (!response.ok) {
+-      const error = await response.json();
+-      throw new Error(error.message || 'Failed to generate lyrics');
+-    }
+-
+-    return response.json();
++    const response = await fetchWithTimeout(
++      `${API_URL}/api/lyrics/generate`,
++      {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ originalLyrics, context: context || '' }),
++      },
++      60000
++    );
++    return handleResponse<{
++      success: boolean;
++      originalLyrics: string;
++      generatedLyrics: string;
++      sentiment: Record<string, unknown>;
++      generatedAt: string;
++    }>(response);
+   },
+ 
+-  // Process audio with new lyrics
+   async processAudio(uploadId: string, payload: {
+     originalLyrics: string;
+     newLyrics: string;
+     voiceStyle?: string;
+   }) {
+-    const response = await fetch(`${API_URL}/api/process/${uploadId}`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify(payload),
+-    });
+-
+-    if (!response.ok) {
+-      throw new Error(`Processing failed: ${response.statusText}`);
+-    }
+-
+-    return response.json();
++    const response = await fetchWithTimeout(
++      `${API_URL}/api/process/${uploadId}`,
++      {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify(payload),
++      },
++      60000
++    );
++    return handleResponse<{
++      processId: string;
++      uploadId: string;
++      status: string;
++      progress: number;
++      message: string;
++    }>(response);
+   },
+ 
+-  // Get processing status
+   async getStatus(processId: string) {
+-    const response = await fetch(`${API_URL}/api/process/${processId}`);
+-    if (!response.ok) {
+-      throw new Error(`Status check failed: ${response.statusText}`);
+-    }
+-    return response.json();
++    const response = await fetchWithTimeout(`${API_URL}/api/process/${processId}`);
++    return handleResponse<{
++      processId: string;
++      status: string;
++      progress: number;
++      resultUrl?: string;
++    }>(response);
+   },
+ 
+-  // Poll for completion
+   async pollUntilComplete(processId: string, maxAttempts = 60) {
+     for (let i = 0; i < maxAttempts; i++) {
+       const status = await this.getStatus(processId);
+       if (status.status === 'completed' || status.status === 'failed') {
+         return status;
+       }
+-      // Wait 2 seconds before next poll
+       await new Promise(resolve => setTimeout(resolve, 2000));
+     }
+-    throw new Error('Processing timeout');
++    throw new ApiError('Processing timed out. Please try again.', 'POLL_TIMEOUT', 408);
+   },
+ 
+-  // Get download URL
+   getDownloadUrl(resultId: string) {
+     return `${API_URL}/api/download/${resultId}`;
+   },
+ 
+-  // Synthesize voice with ElevenLabs
+   async synthesizeVoice(text: string, voiceId?: string) {
+-    const response = await fetch(`${API_URL}/api/voice/synthesize`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({
+-        text,
+-        voiceId: voiceId || undefined,
+-      }),
+-    });
+-
+-    if (!response.ok) {
+-      const error = await response.json();
+-      throw new Error(error.message || 'Failed to synthesize voice');
+-    }
+-
+-    return response.json();
++    const response = await fetchWithTimeout(
++      `${API_URL}/api/voice/synthesize`,
++      {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ text, voiceId: voiceId || undefined }),
++      },
++      60000
++    );
++    return handleResponse<{
++      success: boolean;
++      audioFile: string;
++      audioPath: string;
++      textLength: number;
++      synthesizedAt: string;
++    }>(response);
+   },
+ 
+-  // Get available voices
+   async getAvailableVoices() {
+-    const response = await fetch(`${API_URL}/api/voice/list`);
+-    if (!response.ok) {
+-      throw new Error('Failed to fetch voices');
+-    }
+-    return response.json();
++    const response = await fetchWithTimeout(`${API_URL}/api/voice/list`);
++    return handleResponse<{
++      success: boolean;
++      voices: Array<{ voice_id: string; name: string }>;
++      count: number;
++    }>(response);
+   },
+ };
+diff --git a/ai-music-lyric-editor/frontend/next.config.js b/ai-music-lyric-editor/frontend/next.config.js
+index f416eef..50f8420 100644
+--- a/ai-music-lyric-editor/frontend/next.config.js
++++ b/ai-music-lyric-editor/frontend/next.config.js
+@@ -1,16 +1,9 @@
+ /** @type {import('next').NextConfig} */
+ const nextConfig = {
+   reactStrictMode: true,
+-  swcMinify: true,
+   images: {
+     unoptimized: true,
+   },
+-  webpack: (config) => {
+-    config.resolve.fallback = {
+-      ...config.resolve.fallback,
+-    };
+-    return config;
+-  },
+ };
+ 
+ module.exports = nextConfig;
+diff --git a/ai-music-lyric-editor/frontend/tsconfig.json b/ai-music-lyric-editor/frontend/tsconfig.json
+index c93bdfd..8e5819c 100644
+--- a/ai-music-lyric-editor/frontend/tsconfig.json
++++ b/ai-music-lyric-editor/frontend/tsconfig.json
+@@ -24,6 +24,7 @@
+     "noEmit": true,
+     "incremental": true,
+     "isolatedModules": true,
++    "ignoreDeprecations": "5.0",
+     "plugins": [
+       {
+         "name": "next"

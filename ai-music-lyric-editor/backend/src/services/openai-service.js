@@ -1,19 +1,21 @@
-// OpenAI Integration
 const { OpenAI } = require('openai');
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let openai = null;
 
-/**
- * Generate new lyrics based on original
- * @param {string} originalLyrics - Original song lyrics
- * @param {string} context - Context for lyrics (mood, style, theme)
- * @returns {Promise<string>} Generated new lyrics
- */
+function getOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not configured. Please add it to your .env file.');
+  }
+  if (!openai) {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return openai;
+}
+
 async function generateLyrics(originalLyrics, context = '') {
-  try {
-    const prompt = `You are a professional lyric writer. 
+  const client = getOpenAIClient();
+
+  const prompt = `You are a professional lyric writer. 
 Given the following original lyrics, generate new lyrics that:
 1. Keep the same structure and rhythm
 2. Maintain the same melody/syllable count per line
@@ -26,7 +28,8 @@ ${originalLyrics}
 
 Generate only the new lyrics without any explanation.`;
 
-    const response = await openai.chat.completions.create({
+  try {
+    const response = await client.chat.completions.create({
       model: 'gpt-4',
       messages: [
         {
@@ -44,19 +47,22 @@ Generate only the new lyrics without any explanation.`;
 
     return response.choices[0].message.content;
   } catch (error) {
-    console.error('Error generating lyrics:', error);
-    throw new Error('Failed to generate lyrics');
+    console.error('OpenAI API error:', error.message);
+    if (error.status === 401) {
+      throw new Error('Invalid OpenAI API key. Please check your OPENAI_API_KEY in .env');
+    }
+    if (error.status === 429) {
+      throw new Error('OpenAI rate limit exceeded. Please try again later.');
+    }
+    throw new Error('Failed to generate lyrics: ' + error.message);
   }
 }
 
-/**
- * Analyze sentiment of lyrics
- * @param {string} lyrics - Lyrics to analyze
- * @returns {Promise<Object>} Sentiment analysis
- */
 async function analyzeSentiment(lyrics) {
   try {
-    const response = await openai.chat.completions.create({
+    const client = getOpenAIClient();
+
+    const response = await client.chat.completions.create({
       model: 'gpt-4',
       messages: [
         {
@@ -84,7 +90,7 @@ ${lyrics}`,
       return {};
     }
   } catch (error) {
-    console.error('Error analyzing sentiment:', error);
+    console.error('Sentiment analysis error:', error.message);
     return {};
   }
 }
