@@ -1,0 +1,18 @@
+{
+  "name": "sketchtravel-3d-gallery",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Gallery trưng bày sản phẩm Sketchtravel dạng 3D tương tác (Three.js)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "0.169.0"
+  },
+  "devDependencies": {
+    "vite": "5.4.10"
+  }
+}
