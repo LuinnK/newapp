@@ -49,6 +49,7 @@ let renderer, scene, camera, controls, cardMesh;
 let current = 0;
 let autoRotate = true;
 let initialized = false;
+let loadGeneration = 0;
 const loader = new THREE.TextureLoader();
 
 function initScene() {
@@ -189,11 +190,17 @@ function makeBackTexture(product, aspect) {
 function loadProduct(index) {
   current = (index + products.length) % products.length;
   const product = products[current];
+  const generation = ++loadGeneration;
   vTitle.textContent = product.title;
   vDesc.textContent = product.description;
   loaderEl.hidden = false;
 
   loader.load(product.image, (texture) => {
+    // Ignore stale loads: a newer navigation superseded this one.
+    if (generation !== loadGeneration) {
+      texture.dispose();
+      return;
+    }
     if (cardMesh) {
       cardMesh.geometry.dispose();
       cardMesh.material.forEach((m) => {
